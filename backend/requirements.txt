@@ -8,6 +8,7 @@ pydantic-settings==2.5.2
 python-jose[cryptography]==3.3.0
 passlib[argon2]==1.7.4
 python-multipart==0.0.9
+email-validator==2.2.0
 apscheduler==3.10.4
 cryptography==43.0.1
 google-api-python-client==2.146.0
