@@ -1,18 +1,42 @@
-# Env files
+# Environment / secrets
 .env
+.env.*
+!.env.example
 backend/.env
 frontend/.env
+backend/*.json
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
 .venv/
 venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
 # Node
 node_modules/
 frontend/dist/
 
+# IDE
+.vscode/
+.idea/
+
 # OS
 .DS_Store
-backend/*.json
+Thumbs.db
+
+# Local project backups
+*.zip
+
+# Logs
+*.log
