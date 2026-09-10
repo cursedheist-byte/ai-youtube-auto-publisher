@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #050505;
+}
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(255,255,255,.09), transparent 34rem),
+    #050505;
+  color: #f7f7f5;
+}
+button, input, select { font: inherit; }
+::selection { background: #fff; color: #050505; }
+:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+@layer components {
+  .app-shell { min-height:100vh; background: #050505; }
+  .glass {
+    background: rgba(14,14,14,.72);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 24px 80px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.035);
+    backdrop-filter: blur(18px);
+  }
+  .panel {
+    background: linear-gradient(145deg, rgba(20,20,20,.96), rgba(9,9,9,.96));
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 24px;
+    box-shadow: 0 22px 70px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.035);
+  }
+  .panel-soft {
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.085);
+    border-radius: 18px;
+  }
+  .btn-primary {
+    color:#050505; background:#fff; border:1px solid #fff;
+    border-radius:14px; font-weight:700; transition:.22s ease;
+    box-shadow: 0 8px 30px rgba(255,255,255,.10);
+  }
+  .btn-primary:hover { transform:translateY(-2px); box-shadow:0 12px 40px rgba(255,255,255,.18); }
+  .btn-ghost {
+    color:#fff; background:rgba(255,255,255,.045);
+    border:1px solid rgba(255,255,255,.12); border-radius:14px;
+    transition:.22s ease;
+  }
+  .btn-ghost:hover { background:rgba(255,255,255,.085); border-color:rgba(255,255,255,.22); transform:translateY(-1px); }
+  .field {
+    width:100%; box-sizing:border-box; color:#fff; background:#0b0b0b;
+    border:1px solid rgba(255,255,255,.11); border-radius:13px; padding:12px 14px;
+    transition:.2s ease;
+  }
+  .field::placeholder { color:#666; }
+  .field:focus { border-color:rgba(255,255,255,.42); box-shadow:0 0 0 4px rgba(255,255,255,.045); outline:none; }
+  .eyebrow { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:#8e8e8e; font-weight:700; }
+  .muted { color:#8f8f8f; }
+  .reveal { animation: reveal .65s cubic-bezier(.2,.75,.25,1) both; }
+  .float { animation: float 5s ease-in-out infinite; }
+  .pulse-dot { animation:pulseDot 2s ease-in-out infinite; }
+  .grid-bg {
+    background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: linear-gradient(to bottom, black, transparent 88%);
+  }
+  .noise { position:relative; }
+  .noise::after {
+    content:""; position:absolute; inset:0; pointer-events:none; opacity:.035;
+    background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  }
+  .orbit { animation: spin 18s linear infinite; transform-origin:center; }
+  .dashboard-card { transition: transform .25s ease, border-color .25s ease, background .25s ease; }
+  .dashboard-card:hover { transform:translateY(-4px); border-color:rgba(255,255,255,.18); background:rgba(255,255,255,.055); }
+  .achievement-toast { animation: achievementIn .45s cubic-bezier(.2,.8,.2,1) both; }
+}
+@keyframes achievementIn { from { opacity:0; transform:translate3d(30px,-10px,0) scale(.96); } to { opacity:1; transform:none; } }
+
+@keyframes reveal { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:none} }
+@keyframes float { 0%,100%{transform:translateY(0) rotateX(0)} 50%{transform:translateY(-12px) rotateX(3deg)} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes pulseDot { 0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,.18)} 50%{box-shadow:0 0 0 8px rgba(255,255,255,0)} }
+@media (prefers-reduced-motion:reduce) {
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}

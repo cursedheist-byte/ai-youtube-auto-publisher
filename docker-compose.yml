@@ -1,0 +1,21 @@
+version: "3.8"
+
+# Local development database only. The backend and frontend run directly on
+# your machine (uvicorn / vite dev server) for the fastest reload loop --
+# this just saves you from installing Postgres natively.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_yt_publisher
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
