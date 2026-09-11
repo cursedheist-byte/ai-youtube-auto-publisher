@@ -3,7 +3,7 @@ import urllib.parse
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, Cookie
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, Cookie
 from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -72,8 +72,16 @@ def _safe_oauth_return_path(return_to: str | None) -> str:
         return "/app"
     query = urllib.parse.urlsplit(return_to).query
     return f"{path}?{query}" if query else path
+def _is_https(request: Request) -> bool:
+    """HTTPS detection that works behind Render's TLS-terminating proxy."""
+    if request.url.scheme == "https":
+        return True
+    return request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+
+
 @router.get("/oauth/start", response_model=OAuthStartOut)
 def start_oauth(
+    request: Request,
     response: Response,
     return_to: str | None = Query(default=None, max_length=2048),
     db: Session = Depends(get_db),
@@ -84,19 +92,28 @@ def start_oauth(
         url, browser_nonce = build_authorization_url(db, user.id)
     except YouTubeChannelError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    # In production the SPA (Vercel) calls the API (Render) cross-site, so the
+    # browser-binding cookie must be Secure + SameSite=None to survive
+    # third-party Set-Cookie rules; otherwise the callback arrives with no
+    # cookie and the state check fails. Locally (same-site localhost) Lax/False
+    # keeps working. Cookie value/path/domain unchanged: still scoped to the
+    # backend origin and only to /api/channels/oauth.
+    https = settings.oauth_state_cookie_secure or _is_https(request)
+    cookie_samesite = "none" if https else "lax"
     response.set_cookie(
         settings.oauth_state_cookie_name, browser_nonce, max_age=settings.oauth_state_ttl_seconds,
-        httponly=True, secure=settings.oauth_state_cookie_secure, samesite="lax", path="/api/channels/oauth"
+        httponly=True, secure=https, samesite=cookie_samesite, path="/api/channels/oauth"
     )
     response.set_cookie(
         f"{settings.oauth_state_cookie_name}_return",
         _safe_oauth_return_path(return_to),
         max_age=settings.oauth_state_ttl_seconds,
         httponly=True,
-        secure=settings.oauth_state_cookie_secure,
-        samesite="lax",
+        secure=https,
+        samesite=cookie_samesite,
         path="/api/channels/oauth",
     )
+    logger.info("oauth start: user %s state cookie set (secure=%s samesite=%s)", user.id, https, cookie_samesite)
     return OAuthStartOut(authorization_url=url)
 
 @router.get("/oauth/callback")
@@ -114,6 +131,11 @@ def oauth_callback(
     bound to the initiating browser by an HttpOnly cookie.
     """
     safe_return_path = _safe_oauth_return_path(return_to)
+    # Safe diagnostics only: presence booleans, never cookie/state values.
+    logger.info(
+        "oauth callback: state_param_present=%s oauth_state_cookie_present=%s return_cookie_present=%s",
+        state is not None, browser_nonce is not None, return_to is not None,
+    )
 
     def redirect_error(message: str):
         response = RedirectResponse(

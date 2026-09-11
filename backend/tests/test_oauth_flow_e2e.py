@@ -47,7 +47,7 @@ def real_db(monkeypatch):
     engine.dispose()
 
 
-def _make_test_user():
+def _make_test_user(real_db=None):
     """Create a throwaway user for this test (password hashed properly via API)."""
     import uuid
     email = f"e2e-oauth-{uuid.uuid4().hex[:8]}@example.com"
@@ -135,3 +135,22 @@ def test_callback_failure_is_visible_in_redirect(real_db):
     )
     assert res.status_code == 307
     assert "channel_error=" in res.headers["location"]
+def test_state_cookie_is_secure_and_samesite_none_on_https(real_db):
+    """Regression: in production the SPA calls the API cross-site, so the
+    browser-binding cookie must be Secure + SameSite=None, otherwise browsers
+    drop the third-party Set-Cookie and the callback fails the state check."""
+    token = _make_test_user(real_db)
+    headers = {"Authorization": f"Bearer {token}", "x-forwarded-proto": "https"}
+    with patch.object(svc, "credential_values", return_value=("cid", "cs", "or-key")):
+        res = client.get(
+            "/api/channels/oauth/start",
+            headers=headers,
+            params={"return_to": "/app"},
+        )
+    assert res.status_code == 200, res.text
+    set_cookie = res.headers.get("set-cookie", "")
+    assert "yt_oauth_state_binding=" in set_cookie
+    assert "Secure" in set_cookie, set_cookie
+    assert "SameSite=none" in set_cookie, set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Path=/api/channels/oauth" in set_cookie
