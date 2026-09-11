@@ -1,9 +1,11 @@
+import logging
 import urllib.parse
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, Cookie
 from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -30,6 +32,7 @@ from app.services.youtube_oauth_service import (
 )
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
+logger = logging.getLogger("ai_yt_publisher.channels")
 
 
 def _get_own_channel_or_404(db: Session, channel_id: uuid.UUID, user: User) -> YouTubeChannel:
@@ -127,6 +130,7 @@ def oauth_callback(
     try:
         user_id = consume_state(db, state, browser_nonce)
     except YouTubeChannelError as exc:
+        logger.info("oauth callback: state rejected (%s)", exc)
         return redirect_error(str(exc))
 
     if error:
@@ -140,7 +144,13 @@ def oauth_callback(
         channel_info = fetch_channel_info(credentials)
         store_channel_connection(db, user_id, credentials, channel_info)
     except YouTubeChannelError as exc:
+        # Safe identifiers only -- never log tokens, secrets or codes.
+        logger.info("oauth callback failed for user %s: %s", user_id, exc)
         return redirect_error(str(exc))
+    except (SQLAlchemyError, Exception) as exc:  # never leave the user on a raw 500
+        db.rollback()
+        logger.exception("oauth callback unexpected failure for user %s", user_id)
+        return redirect_error("oauth_callback_failed")
 
     response = RedirectResponse(
         f"{settings.frontend_url}{safe_return_path}"
@@ -148,6 +158,7 @@ def oauth_callback(
     )
     response.delete_cookie(settings.oauth_state_cookie_name, path="/api/channels/oauth")
     response.delete_cookie(f"{settings.oauth_state_cookie_name}_return", path="/api/channels/oauth")
+    logger.info("oauth callback success: user %s connected channel %s (%s)", user_id, channel_info["id"], channel_info["title"])
     return response
 
 @router.post("/{channel_id}/disconnect", status_code=status.HTTP_204_NO_CONTENT)
