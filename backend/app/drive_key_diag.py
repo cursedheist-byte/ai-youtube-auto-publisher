@@ -24,6 +24,8 @@ def main() -> None:
         print(f"file_readable: False ({exc.__class__.__name__})")
         return
     print(f"file_size_bytes: {len(raw.encode('utf-8'))}")
+    import hashlib
+    print(f"file_sha256_prefix: {hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}")
     try:
         info = json.loads(raw)
         print("json_parse_ok: True")

@@ -58,6 +58,9 @@ def _key_metadata(key) -> dict:
         "has_carriage_return": "\r" in key,
         "has_surrounding_whitespace": key != stripped,
         "double_quote_count": key.count('"'),
+        # Per-line hash prefixes (8 hex chars): lets a corrupted line be
+        # localized without ever exposing key material.
+        "line_hash_prefixes": [hashlib.sha256(line.encode("utf-8")).hexdigest()[:8] for line in key.splitlines()],
     }
 
 
@@ -70,6 +73,9 @@ def _log_load_diagnostics(key_path: str, raw: str, info: dict | None, stage: str
         "file_size_bytes": os.path.getsize(key_path) if os.path.exists(key_path) else None,
         "raw_json_parse_ok": info is not None,
     }
+    if os.path.exists(key_path):
+        with open(key_path, "rb") as fh:
+            payload["file_sha256_prefix"] = hashlib.sha256(fh.read()).hexdigest()[:16]
     if info is not None and isinstance(info, dict):
         key = info.get("private_key")
         payload.update(
