@@ -4,8 +4,8 @@ export function listMyChannels() {
   return apiClient.get("/api/channels").then((res) => res.data);
 }
 
-export function startOAuth() {
-  return apiClient.get("/api/channels/oauth/start").then((res) => res.data);
+export function startOAuth(returnTo) {
+  return apiClient.get("/api/channels/oauth/start", { params: { return_to: returnTo } }).then((res) => res.data);
 }
 
 export function disconnectChannel(channelId) {

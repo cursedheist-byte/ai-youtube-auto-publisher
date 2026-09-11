@@ -60,8 +60,22 @@ def list_my_channels(db: Session = Depends(get_db), user: User = Depends(get_cur
     return results
 
 
+def _safe_oauth_return_path(return_to: str | None) -> str:
+    # Keep the OAuth return target on the authenticated frontend routes.
+    if not return_to or not return_to.startswith("/") or return_to.startswith("//"):
+        return "/app"
+    path = urllib.parse.urlsplit(return_to).path
+    if path not in {"/setup", "/app", "/dashboard"}:
+        return "/app"
+    query = urllib.parse.urlsplit(return_to).query
+    return f"{path}?{query}" if query else path
 @router.get("/oauth/start", response_model=OAuthStartOut)
-def start_oauth(response: Response, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def start_oauth(
+    response: Response,
+    return_to: str | None = Query(default=None, max_length=2048),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     try:
         purge_expired_oauth_states(db)
         url, browser_nonce = build_authorization_url(db, user.id)
@@ -71,8 +85,16 @@ def start_oauth(response: Response, db: Session = Depends(get_db), user: User = 
         settings.oauth_state_cookie_name, browser_nonce, max_age=settings.oauth_state_ttl_seconds,
         httponly=True, secure=settings.oauth_state_cookie_secure, samesite="lax", path="/api/channels/oauth"
     )
+    response.set_cookie(
+        f"{settings.oauth_state_cookie_name}_return",
+        _safe_oauth_return_path(return_to),
+        max_age=settings.oauth_state_ttl_seconds,
+        httponly=True,
+        secure=settings.oauth_state_cookie_secure,
+        samesite="lax",
+        path="/api/channels/oauth",
+    )
     return OAuthStartOut(authorization_url=url)
-
 
 @router.get("/oauth/callback")
 def oauth_callback(
@@ -81,15 +103,22 @@ def oauth_callback(
     error: str | None = Query(default=None),
     db: Session = Depends(get_db),
     browser_nonce: str | None = Cookie(default=None, alias=settings.oauth_state_cookie_name),
+    return_to: str | None = Cookie(default=None, alias=f"{settings.oauth_state_cookie_name}_return"),
 ):
     """
     Google redirects the browser here directly (no JWT header available).
     Identity comes from the one-time server-side state record, additionally
     bound to the initiating browser by an HttpOnly cookie.
     """
+    safe_return_path = _safe_oauth_return_path(return_to)
+
     def redirect_error(message: str):
-        response = RedirectResponse(f"{settings.frontend_url}/?channel_error={urllib.parse.quote(message)}")
+        response = RedirectResponse(
+            f"{settings.frontend_url}{safe_return_path}"
+            f"{'&' if '?' in safe_return_path else '?'}channel_error={urllib.parse.quote(message)}"
+        )
         response.delete_cookie(settings.oauth_state_cookie_name, path="/api/channels/oauth")
+        response.delete_cookie(f"{settings.oauth_state_cookie_name}_return", path="/api/channels/oauth")
         return response
 
     if not state:
@@ -113,8 +142,12 @@ def oauth_callback(
     except YouTubeChannelError as exc:
         return redirect_error(str(exc))
 
-    response = RedirectResponse(f"{settings.frontend_url}/?channel_connected=1")
+    response = RedirectResponse(
+        f"{settings.frontend_url}{safe_return_path}"
+        f"{'&' if '?' in safe_return_path else '?'}channel_connected=1"
+    )
     response.delete_cookie(settings.oauth_state_cookie_name, path="/api/channels/oauth")
+    response.delete_cookie(f"{settings.oauth_state_cookie_name}_return", path="/api/channels/oauth")
     return response
 
 @router.post("/{channel_id}/disconnect", status_code=status.HTTP_204_NO_CONTENT)
