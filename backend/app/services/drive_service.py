@@ -8,6 +8,7 @@ so the router can always show the admin a plain-English reason instead of
 a 500. Nothing in this module writes to the database -- it only talks to
 Google and returns plain dicts/lists.
 """
+import hashlib
 import json
 import logging
 import os
@@ -40,6 +41,47 @@ class DriveSourceError(Exception):
 logger = logging.getLogger("ai_yt_publisher.drive")
 
 
+def _key_metadata(key) -> dict:
+    """Safe metadata about a private_key value. Never returns or logs the key."""
+    if not isinstance(key, str):
+        return {"type": type(key).__name__}
+    stripped = key.strip()
+    return {
+        "type": "str",
+        "length": len(key),
+        "sha256_prefix": hashlib.sha256(key.encode("utf-8")).hexdigest()[:16],
+        "starts_with_pem_header": stripped.startswith("-----BEGIN"),
+        "ends_with_pem_footer": stripped.endswith("-----END PRIVATE KEY-----") or stripped.endswith("-----END RSA PRIVATE KEY-----"),
+        "has_literal_backslash_n": "\\n" in key,
+        "has_real_newline": "\n" in key,
+        "newline_count": key.count("\n"),
+        "has_carriage_return": "\r" in key,
+        "has_surrounding_whitespace": key != stripped,
+        "double_quote_count": key.count('"'),
+    }
+
+
+def _log_load_diagnostics(key_path: str, raw: str, info: dict | None, stage: str) -> None:
+    """Log safe file/JSON/key metadata. Values are never logged."""
+    payload: dict = {
+        "path": key_path,
+        "stage": stage,
+        "file_exists": os.path.exists(key_path),
+        "file_size_bytes": os.path.getsize(key_path) if os.path.exists(key_path) else None,
+        "raw_json_parse_ok": info is not None,
+    }
+    if info is not None and isinstance(info, dict):
+        key = info.get("private_key")
+        payload.update(
+            {
+                "top_level_keys": sorted(k for k in info if k != "private_key"),
+                "private_key_exists": key is not None,
+                "private_key_metadata": _key_metadata(key),
+            }
+        )
+    logger.info("drive key diagnostics: %s", json.dumps(payload, default=str))
+
+
 def _load_service_account_info(key_path: str) -> dict:
     """
     Loads a Google service-account JSON key file, tolerating the two ways a
@@ -51,6 +93,12 @@ def _load_service_account_info(key_path: str) -> dict:
     """
     with open(key_path, "r", encoding="utf-8") as fh:
         raw = fh.read().strip()
+    try:
+        probe_info = json.loads(raw)
+        probe_info = probe_info if isinstance(probe_info, dict) else None
+    except json.JSONDecodeError:
+        probe_info = None
+    _log_load_diagnostics(key_path, raw, probe_info, "as_loaded")
     # Case 1: secret pasted as a JSON-string-wrapped value (e.g. via an env var).
     if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
         try:
@@ -76,6 +124,11 @@ def _load_service_account_info(key_path: str) -> dict:
     if "\\n" in key and "\n" not in key:
         info["private_key"] = key.replace("\\n", "\n")
         logger.info("drive key: normalized literal backslash-n newlines in private_key")
+    if "\r\n" in info["private_key"] or "\r" in info["private_key"]:
+        info["private_key"] = info["private_key"].replace("\r\n", "\n").replace("\r", "\n")
+        logger.info("drive key: normalized CRLF/CR newlines in private_key")
+    info["private_key"] = info["private_key"].strip()
+    _log_load_diagnostics(key_path, raw, info, "after_normalization")
     logger.info(
         "drive key loaded: fields=%s private_key_lines=%d",
         sorted(k for k in info if k != "private_key"),
@@ -118,10 +171,13 @@ def _get_drive_service():
     try:
         info = _load_service_account_info(key_path)
         credentials = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
+        logger.info("drive credentials constructed OK (no key material logged)")
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
     except DriveSourceError:
         raise
     except Exception as exc:  # malformed key material, unsupported key, etc.
+        # Exception text from the crypto library names the algorithm/format only.
+        logger.error("drive credential construction failed: %s", exc)
         raise DriveSourceError(f"Couldn't initialize the Drive client: {exc}") from exc
 
 

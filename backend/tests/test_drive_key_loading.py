@@ -53,7 +53,8 @@ def test_loads_key_with_literal_backslash_n_newlines(tmp_path):
     loaded = _load_service_account_info(path)
     assert "\n" in loaded["private_key"]
     assert "\\n" not in loaded["private_key"]
-    assert loaded["private_key"] == info["private_key"]
+    assert loaded["private_key"].strip() == info["private_key"].strip()
+    assert loaded["private_key"].endswith("-----END PRIVATE KEY-----")
 
 
 def test_loads_key_from_double_quoted_secret(tmp_path):
@@ -61,7 +62,7 @@ def test_loads_key_from_double_quoted_secret(tmp_path):
     info = _fake_service_account_info()
     path = _write(tmp_path, "quoted.json", json.dumps(json.dumps(info)))
     loaded = _load_service_account_info(path)
-    assert loaded["private_key"] == info["private_key"]
+    assert loaded["private_key"].strip() == info["private_key"].strip()
 
 
 def test_rejects_invalid_json_without_leaking_contents(tmp_path):
