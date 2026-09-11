@@ -8,6 +8,8 @@ so the router can always show the admin a plain-English reason instead of
 a 500. Nothing in this module writes to the database -- it only talks to
 Google and returns plain dicts/lists.
 """
+import json
+import logging
 import os
 import re
 from functools import lru_cache
@@ -33,6 +35,53 @@ _BARE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{10,}$")
 
 class DriveSourceError(Exception):
     """A Drive-related failure meant to be shown to the admin as-is."""
+
+
+logger = logging.getLogger("ai_yt_publisher.drive")
+
+
+def _load_service_account_info(key_path: str) -> dict:
+    """
+    Loads a Google service-account JSON key file, tolerating the two ways a
+    Render Secret File commonly mangles it:
+      1. the whole JSON wrapped in double quotes,
+      2. the private_key's real newlines stored as literal backslash-n text.
+    Only metadata (booleans/counts) may ever be logged from here -- never the
+    private key or any credential value.
+    """
+    with open(key_path, "r", encoding="utf-8") as fh:
+        raw = fh.read().strip()
+    # Case 1: secret pasted as a JSON-string-wrapped value (e.g. via an env var).
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, str):
+                raw = decoded.strip()
+        except json.JSONDecodeError:
+            pass
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DriveSourceError(
+            "The service account key file is not valid JSON. Re-upload the "
+            "original JSON key file to the Render Secret File unchanged."
+        ) from exc
+    if not isinstance(info, dict) or not info.get("private_key"):
+        raise DriveSourceError(
+            "The service account key file has no private_key field. "
+            "Upload the full JSON key downloaded from Google Cloud Console."
+        )
+    # Case 2: literal "\\n" instead of real newlines inside the PEM.
+    key = info["private_key"]
+    if "\\n" in key and "\n" not in key:
+        info["private_key"] = key.replace("\\n", "\n")
+        logger.info("drive key: normalized literal backslash-n newlines in private_key")
+    logger.info(
+        "drive key loaded: fields=%s private_key_lines=%d",
+        sorted(k for k in info if k != "private_key"),
+        info["private_key"].count("\n"),
+    )
+    return info
 
 
 def extract_folder_id(folder_link_or_id: str) -> str:
@@ -67,9 +116,12 @@ def _get_drive_service():
         raise DriveSourceError(f"Service account key file not found at: {key_path}")
 
     try:
-        credentials = service_account.Credentials.from_service_account_file(key_path, scopes=DRIVE_SCOPES)
+        info = _load_service_account_info(key_path)
+        credentials = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
-    except Exception as exc:  # malformed key file, etc.
+    except DriveSourceError:
+        raise
+    except Exception as exc:  # malformed key material, unsupported key, etc.
         raise DriveSourceError(f"Couldn't initialize the Drive client: {exc}") from exc
 
 
