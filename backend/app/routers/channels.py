@@ -1,7 +1,7 @@
 import logging
 import urllib.parse
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, Cookie
 from fastapi.responses import RedirectResponse
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import AutomationSettings, Category, User, YouTubeChannel
+from app.models import AutomationRun, AutomationSettings, Category, User, YouTubeChannel
 from app.schemas import (
     AutomationSettingsOut,
     AutomationSettingsUpdate,
@@ -214,6 +214,60 @@ def update_settings(
     db.commit()
     db.refresh(settings_row)
     return settings_row
+
+@router.get("/{channel_id}/slot-plan")
+def slot_plan(
+    channel_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Today's scheduled upload times for this channel, in the schedule tz."""
+    from zoneinfo import ZoneInfo
+
+    from app.services import schedule_logic
+    from app.services.automation_service import get_schedule
+
+    channel = _get_own_channel_or_404(db, channel_id, user)
+    settings_row = channel.settings
+    if settings_row is None or not settings_row.enabled:
+        return {"enabled": False, "slots": []}
+    schedule = get_schedule(db)
+    tz = ZoneInfo(schedule.timezone)
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.astimezone(tz).date()
+    count = max(1, min(settings_row.daily_upload_count, 10))
+    times = schedule_logic.slot_times(
+        channel_key=str(channel.id),
+        run_date=today,
+        count=count,
+        anchor_1=schedule.anchor_1,
+        anchor_2=schedule.anchor_2,
+        tz_name=schedule.timezone,
+    )
+    done = {
+        r.slot_index
+        for r in db.query(AutomationRun)
+        .filter(AutomationRun.channel_id == channel.id, AutomationRun.run_date == today)
+        .all()
+    }
+    return {
+        "enabled": True,
+        "daily_upload_count": count,
+        "timezone": schedule.timezone,
+        "anchor_1": schedule.anchor_1,
+        "anchor_2": schedule.anchor_2,
+        "slots": [
+            {
+                "slot_index": i,
+                "scheduled_at_local": t.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
+                "scheduled_at_utc": t.isoformat(),
+                "due": t <= now_utc,
+                "done": i in done,
+            }
+            for i, t in enumerate(times)
+        ],
+    }
+
 
 @router.get("/{channel_id}/runs", response_model=list[AutomationRunOut])
 def list_runs(

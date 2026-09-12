@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     BigInteger,
     String,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -231,19 +232,46 @@ class AutomationSettings(Base):
     channel: Mapped["YouTubeChannel"] = relationship(back_populates="settings")
     category: Mapped["Category | None"] = relationship()
 
+
+class AutomationSchedule(Base):
+    """Admin-controlled daily publishing windows (singleton row).
+
+    Exactly two anchor times in the admin's timezone. User channels are
+    distributed around these two anchors by the scheduler.
+    """
+
+    __tablename__ = "automation_schedule"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # Single-row guarantee: 'singleton' is always True.
+    singleton: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, unique=True)
+    anchor_1: Mapped[str] = mapped_column(String(5), nullable=False)  # "HH:MM" 24h
+    anchor_2: Mapped[str] = mapped_column(String(5), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
 class AutomationRun(Base):
     __tablename__ = "automation_runs"
-    __table_args__ = (UniqueConstraint("channel_id", "run_date", name="uq_channel_run_date"),)
+    __table_args__ = (
+        UniqueConstraint("channel_id", "run_date", "slot_index", name="uq_channel_run_slot"),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     channel_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("youtube_channels.id"), nullable=False)
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus, name="run_status"), nullable=False)
+    status: Mapped[RunStatus] = mapped_column(
+        Enum(RunStatus, name="run_status", values_callable=lambda enum_cls: [member.value for member in enum_cls]), nullable=False
+    )
     videos_attempted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     videos_uploaded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Which scheduling anchor produced this run (0 = anchor 1, 1 = anchor 2).
+    # Legacy rows default to 0.
+    slot_index: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
 
     channel: Mapped["YouTubeChannel"] = relationship(back_populates="runs")
     upload_history: Mapped[list["UploadHistory"]] = relationship(back_populates="run")

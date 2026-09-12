@@ -17,7 +17,9 @@ from app.models import (
     YouTubeChannel,
     ChannelStatus,
 )
-from app.schemas import AdminDashboard, AutomationRunOut
+from app.schemas import AdminDashboard, AutomationRunOut, AutomationScheduleOut, AutomationScheduleUpdate
+from app.services.automation_service import get_schedule
+from app.services import schedule_logic
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -54,6 +56,57 @@ def get_dashboard(db: Session = Depends(get_db)):
 @router.get("/automation/runs", response_model=list[AutomationRunOut], dependencies=[Depends(require_admin)])
 def recent_automation_runs(limit: int = 50, db: Session = Depends(get_db)):
     return db.query(AutomationRun).order_by(AutomationRun.started_at.desc()).limit(min(limit, 100)).all()
+
+
+@router.get("/automation/schedule", response_model=AutomationScheduleOut, dependencies=[Depends(require_admin)])
+def get_automation_schedule(db: Session = Depends(get_db)):
+    """The two admin anchor times the whole publishing day is built around."""
+    return get_schedule(db)
+
+
+@router.put("/automation/schedule", response_model=AutomationScheduleOut, dependencies=[Depends(require_admin)])
+def update_automation_schedule(payload: AutomationScheduleUpdate, db: Session = Depends(get_db)):
+    """Admin sets exactly the two daily anchor times (HH:MM 24h)."""
+    from fastapi import HTTPException
+
+    if payload.anchor_1 is None and payload.anchor_2 is None:
+        raise HTTPException(status_code=400, detail="Provide anchor_1 and/or anchor_2")
+    row = get_schedule(db)
+    a1 = payload.anchor_1 or row.anchor_1
+    a2 = payload.anchor_2 or row.anchor_2
+    t1, t2 = schedule_logic.parse_hhmm(a1), schedule_logic.parse_hhmm(a2)
+    if t1 == t2:
+        raise HTTPException(status_code=400, detail="The two anchor times must be different")
+    row.anchor_1 = a1
+    row.anchor_2 = a2
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/automation/status", dependencies=[Depends(require_admin)])
+def automation_status(db: Session = Depends(get_db)):
+    """Everything the admin dashboard needs about today's automation state."""
+    from datetime import datetime as dt, timezone as tz
+    from zoneinfo import ZoneInfo
+
+    schedule = get_schedule(db)
+    now_utc = dt.now(tz.utc)
+    local_now = now_utc.astimezone(ZoneInfo(schedule.timezone))
+    today = local_now.date()
+    runs_today = db.query(AutomationRun).filter(AutomationRun.run_date == today).all()
+    connected_channels = (
+        db.query(func.count(YouTubeChannel.id)).filter(YouTubeChannel.status == ChannelStatus.CONNECTED).scalar() or 0
+    )
+    return {
+        "anchor_1": schedule.anchor_1,
+        "anchor_2": schedule.anchor_2,
+        "timezone": schedule.timezone,
+        "server_time_local": local_now.strftime("%Y-%m-%d %H:%M"),
+        "connected_channels": connected_channels,
+        "runs_today": len(runs_today),
+        "uploads_today": sum(r.videos_uploaded for r in runs_today),
+    }
 
 
 @router.get("/health-summary", dependencies=[Depends(require_admin)])

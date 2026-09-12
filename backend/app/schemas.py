@@ -47,6 +47,20 @@ class AdminDashboard(BaseModel):
     automation_status: str
 
 
+class AutomationScheduleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    anchor_1: str
+    anchor_2: str
+    timezone: str
+    updated_at: datetime
+
+
+class AutomationScheduleUpdate(BaseModel):
+    anchor_1: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    anchor_2: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 # --- Drive sources ---
 
 
@@ -118,6 +132,11 @@ class AutomationSettingsOut(BaseModel):
     enabled: bool
     daily_upload_count: int
     category_id: uuid.UUID | None
+
+
+class SlotPlanOut(BaseModel):
+    slot_index: int
+    scheduled_at_utc: datetime
 
 
 class AutomationSettingsUpdate(BaseModel):
@@ -214,6 +233,7 @@ class AutomationRunOut(BaseModel):
     notes: str | None
     started_at: datetime | None
     finished_at: datetime | None
+    slot_index: int = 0
 
 
 class CredentialSettingsUpdate(BaseModel):

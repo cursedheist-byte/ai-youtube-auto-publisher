@@ -2,7 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,11 +26,17 @@ def retry_uploads_job():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not scheduler.get_job("daily_automation"):
+    if not scheduler.get_job("automation_watchdog"):
+        # A 60-second watchdog tick instead of a fixed cron: each tick computes
+        # which anchor slots are due from the admin's schedule and claims them
+        # idempotently. This is what makes the schedule survive Render free
+        # tier sleep/wake — when the service wakes, the next tick catches up
+        # every missed slot of today exactly once.
         scheduler.add_job(
             daily_automation_job,
-            CronTrigger(hour=settings.automation_hour_utc, minute=settings.automation_minute_utc, timezone=settings.scheduler_timezone),
-            id="daily_automation",
+            "interval",
+            minutes=1,
+            id="automation_watchdog",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -49,7 +54,7 @@ async def lifespan(app: FastAPI):
         )
     if not scheduler.running:
         scheduler.start()
-        logger.info("APScheduler started (daily automation %02d:%02d %s; retry every %d min).", settings.automation_hour_utc, settings.automation_minute_utc, settings.scheduler_timezone, settings.retry_interval_minutes)
+        logger.info("APScheduler started (watchdog every 1 min; retry every %d min).", settings.retry_interval_minutes)
     yield
     if scheduler.running:
         scheduler.shutdown(wait=False)

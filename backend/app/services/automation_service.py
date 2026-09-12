@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session, aliased
 from app.config import settings
 from app.database import SessionLocal
 from app.models import (
-    AutomationRun, AutomationSettings, ChannelStatus, DriveSource, DriveVideo,
+    AutomationRun, AutomationSchedule, AutomationSettings, ChannelStatus, DriveSource, DriveVideo,
     FailedUpload, UploadHistory, UploadStatus, User, YouTubeChannel,
 )
+from app.services import schedule_logic
 from app.services.ai_provider import AIProviderError, get_ai_provider
 from app.services.video_processing import generate_video_metadata
 from app.services.upload_service import claim_upload, mark_failed, mark_success, record_metadata, set_uploading
@@ -66,10 +67,20 @@ def eligible_videos(db: Session, channel_id, limit: int = 100, category_id=None)
     return selected
 
 
-def _claim_daily_run(db: Session, channel_id, run_day: date):
+def _claim_daily_run(db: Session, channel_id, run_day: date, slot_index: int = 0):
+    """Claim a specific scheduling slot for a channel/day.
+
+    Uniqueness is (channel_id, run_date, slot_index) so two anchors per day
+    each get their own run, and concurrent processes/ticks can never create
+    the same slot twice.
+    """
     existing = (
         db.query(AutomationRun)
-        .filter(AutomationRun.channel_id == channel_id, AutomationRun.run_date == run_day)
+        .filter(
+            AutomationRun.channel_id == channel_id,
+            AutomationRun.run_date == run_day,
+            AutomationRun.slot_index == slot_index,
+        )
         .with_for_update()
         .first()
     )
@@ -78,6 +89,7 @@ def _claim_daily_run(db: Session, channel_id, run_day: date):
     run = AutomationRun(
         channel_id=channel_id,
         run_date=run_day,
+        slot_index=slot_index,
         status="failed",
         started_at=datetime.now(timezone.utc),
         videos_attempted=0,
@@ -91,7 +103,11 @@ def _claim_daily_run(db: Session, channel_id, run_day: date):
     except Exception:
         existing = (
             db.query(AutomationRun)
-            .filter(AutomationRun.channel_id == channel_id, AutomationRun.run_date == run_day)
+            .filter(
+                AutomationRun.channel_id == channel_id,
+                AutomationRun.run_date == run_day,
+                AutomationRun.slot_index == slot_index,
+            )
             .with_for_update()
             .first()
         )
@@ -100,18 +116,42 @@ def _claim_daily_run(db: Session, channel_id, run_day: date):
         raise
 
 
-def process_channel(db: Session, channel: YouTubeChannel, *, run_day: date | None = None) -> AutomationRun | None:
+def get_schedule(db: Session):
+    """Return the (single) admin schedule row, creating a default if absent.
+
+    Default anchors 09:00 and 18:00 Asia/Kolkata. The singleton guarantee
+    comes from a unique constraint + advisory lock so two cold starts cannot
+    create two rows.
+    """
+    row = db.query(AutomationSchedule).first()
+    if row:
+        return row
+    # Serialize creation across processes.
+    db.execute(text("SELECT pg_advisory_lock(:k)"), {"k": 71642003})
+    try:
+        row = db.query(AutomationSchedule).first()
+        if row is None:
+            row = AutomationSchedule(singleton=True, anchor_1="09:00", anchor_2="18:00", timezone=schedule_logic.DEFAULT_TIMEZONE)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+    finally:
+        db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": 71642003})
+    return row
+
+
+def process_channel(db: Session, channel: YouTubeChannel, *, run_day: date | None = None, slot_index: int = 0, count_override: int | None = None) -> AutomationRun | None:
     run_day = run_day or datetime.now(ZoneInfo(settings.scheduler_timezone)).date()
     settings_row = channel.settings
     if not settings_row or not settings_row.enabled or channel.status != ChannelStatus.CONNECTED:
         return None
 
-    run, created = _claim_daily_run(db, channel.id, run_day)
+    run, created = _claim_daily_run(db, channel.id, run_day, slot_index)
     if not created:
-        logger.info("[scheduler] channel=%s already has a run for %s; skipping", channel.id, run_day)
+        logger.info("[scheduler] channel=%s already has run slot=%s for %s; skipping", channel.id, slot_index, run_day)
         return run
 
-    count = max(1, min(settings_row.daily_upload_count, 10))
+    count = max(1, min(count_override if count_override is not None else settings_row.daily_upload_count, 10))
     videos = eligible_videos(db, channel.id, limit=max(count * 3, count), category_id=settings_row.category_id)
     if not videos:
         run.status = "no_eligible_videos"
@@ -190,23 +230,55 @@ def _unlock_job(db: Session, key: int) -> None:
 
 
 def run_daily_automation() -> None:
-    """Process every enabled channel; a second process skips the same job."""
+    """Watchdog tick: claim and run every due scheduling slot.
+
+    Runs every minute from main.py. Because due slots are computed from the
+    admin's two anchor times with a per-day deterministic distribution, a
+    Render cold start (or any restart) just calls this tick and it catches
+    up all missed slots of today without duplicating any upload — every slot
+    is claimed exactly once via (channel_id, run_date, slot_index).
+    """
     db = SessionLocal()
     lock_key = 71642001
     try:
         if not _try_job_lock(db, lock_key):
             logger.warning("[scheduler] daily job already running in another process; skipping")
             return
+        schedule = get_schedule(db)
+        now_utc = datetime.now(timezone.utc)
+        tz = ZoneInfo(schedule.timezone)
+        run_day = now_utc.astimezone(tz).date()
         channels = (
             db.query(YouTubeChannel)
             .join(AutomationSettings, AutomationSettings.channel_id == YouTubeChannel.id)
             .filter(AutomationSettings.enabled.is_(True), YouTubeChannel.status == ChannelStatus.CONNECTED)
             .all()
         )
-        logger.info("[scheduler] starting daily automation for %d enabled channels", len(channels))
+        if not channels:
+            return
+        logger.info("[scheduler] watchdog tick: %d enabled channels for %s (%s)", len(channels), run_day, schedule.timezone)
         for channel in channels:
             try:
-                process_channel(db, channel)
+                settings_row = channel.settings
+                count = max(1, min(settings_row.daily_upload_count, 10))
+                existing = {
+                    r.slot_index
+                    for r in db.query(AutomationRun)
+                    .filter(AutomationRun.channel_id == channel.id, AutomationRun.run_date == run_day)
+                    .all()
+                }
+                due = schedule_logic.due_slot_indexes(
+                    now_utc=now_utc,
+                    channel_key=str(channel.id),
+                    run_date=run_day,
+                    count=count,
+                    anchor_1=schedule.anchor_1,
+                    anchor_2=schedule.anchor_2,
+                    tz_name=schedule.timezone,
+                    done_slot_indexes=existing,
+                )
+                for slot_index in due:
+                    process_channel(db, channel, run_day=run_day, slot_index=slot_index, count_override=1)
             except Exception:
                 db.rollback()
                 logger.exception("[scheduler] channel=%s failed; continuing", channel.id)
