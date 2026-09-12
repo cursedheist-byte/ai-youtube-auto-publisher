@@ -40,7 +40,21 @@ def upgrade():
 
 def downgrade():
     # Collapse multi-slot runs back to one row per (channel_id, run_date):
-    # keep the lowest slot_index per group.
+    # keep the lowest slot_index per group, first repointing any
+    # upload_history rows that reference the runs being removed.
+    op.execute(
+        """
+        UPDATE upload_history h
+        SET run_id = keep.id
+        FROM automation_runs a
+        JOIN automation_runs keep
+          ON keep.channel_id = a.channel_id
+         AND keep.run_date = a.run_date
+         AND keep.slot_index = 0
+        WHERE h.run_id = a.id
+          AND a.slot_index > 0
+        """
+    )
     op.execute(
         """
         DELETE FROM automation_runs a
