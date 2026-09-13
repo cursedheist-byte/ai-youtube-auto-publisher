@@ -2,8 +2,8 @@ import { Link } from "react-router-dom";
 
 function Mark() {
   return <div className="flex items-center gap-2 font-display font-bold tracking-tight">
-    <span className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-white text-black shadow-[0_0_35px_rgba(255,255,255,.12)]">
-      <span className="h-2 w-2 rounded-full bg-black"/>
+    <span className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-[0_0_35px_rgba(255,0,51,.22)]">
+      <span className="h-2 w-2 rounded-[2px] bg-[#FF0033]"/>
     </span>
     AUTO<span className="text-neutral-500">PUBLISHER</span>
   </div>;
@@ -40,7 +40,7 @@ export default function Landing(){
           <h1 className="max-w-3xl font-display text-6xl font-bold leading-[.94] tracking-[-.05em] sm:text-7xl lg:text-[92px]">Your YouTube.<br/><span className="text-neutral-500">On autopilot.</span></h1>
           <p className="mt-7 max-w-xl text-base leading-7 text-neutral-400 sm:text-lg">Turn Google Drive into an automated publishing pipeline. Pick a category, let AI prepare the metadata, and publish without the repetitive work.</p>
           <div className="mt-8 flex flex-wrap gap-3"><Link to="/register" className="btn-primary px-6 py-3.5">Build your pipeline <span className="ml-2">↗</span></Link><a href="#flow" className="btn-ghost px-6 py-3.5">See how it works</a></div>
-          <div className="mt-9 flex gap-6 text-xs text-neutral-500"><span>01 / SOURCE</span><span>02 / AI</span><span>03 / PUBLISH</span></div>
+          <div className="mt-9 flex gap-6 text-xs text-neutral-500"><span className="flex items-center gap-2"><span className="accent-dot h-1.5 w-1.5 rounded-full"/>01 / SOURCE</span><span>02 / AI</span><span>03 / PUBLISH</span></div>
         </div>
         <div className="reveal" style={{animationDelay:".12s"}}><HeroVisual/></div>
       </section>
