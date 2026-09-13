@@ -78,7 +78,6 @@ Open http://localhost:5173.
 | `AI_REQUEST_TIMEOUT_SECONDS` | Phase 5 onward | AI request timeout |
 | `YOUTUBE_PRIVACY_STATUS` / `YOUTUBE_DEFAULT_CATEGORY_ID` | Phase 6 onward | Upload metadata defaults |
 | `YOUTUBE_UPLOAD_CHUNK_BYTES` | Phase 6 onward | Resumable upload chunk size |
-| `SCHEDULER_TIMEZONE` / `AUTOMATION_HOUR_UTC` / `AUTOMATION_MINUTE_UTC` | Phase 7 onward | Daily scheduler time in the configured scheduler timezone |
 | `RETRY_INTERVAL_MINUTES` / `MAX_UPLOAD_RETRIES` / `UPLOAD_STALE_AFTER_MINUTES` | Phase 8 onward | Retry and stale-upload policy |
 | `OAUTH_STATE_TTL_SECONDS` / `OAUTH_STATE_COOKIE_NAME` / `OAUTH_STATE_COOKIE_SECURE` | OAuth | One-time browser-bound OAuth state |
 
@@ -188,10 +187,20 @@ The Phase 3 codebase has now been extended without changing the FastAPI + SQLAlc
 - Videos are staged only in a short-lived temporary file and deleted in `finally`; no permanent video storage is introduced.
 
 ### Automation
-- APScheduler registers exactly one daily job and one retry job in the single FastAPI process.
-- Daily runs are guarded by `UNIQUE(channel_id, run_date)`.
-- Selection excludes pending/uploading/successful pairs and prefers breadth across active Drive sources before random fill.
+- APScheduler runs a 60-second watchdog tick (plus a retry-interval job) in the single FastAPI process.
+- Daily publishing is driven from the DB, not the process: the admin sets exactly two anchor
+  times (default 09:00 / 18:00, Asia/Kolkata) and each user's `daily_upload_count` is
+  distributed around those anchors — 1/day picks one anchor, 2/day uses both, 3+/day splits
+  ceil/floor between the anchors with randomized minute offsets.
+- Each slot is claimed via `UNIQUE(channel_id, run_date, slot_index)`; the watchdog recomputes
+  due-but-unclaimed slots every tick, so restarts catch up today's missed slots exactly once.
+  If the instance sleeps through an entire calendar day, that day's slots are not recovered.
 - One channel/video failure does not abort other work.
+
+### Production migrations (Render)
+Render does not run Alembic automatically. Either run `alembic upgrade head` against the
+production `DATABASE_URL` after each deploy that adds a migration, or set the service start
+command to `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
 
 ### User/admin API additions
 - Users can view eligible videos, upload history, and automation runs.
