@@ -244,8 +244,8 @@ def slot_plan(
         anchor_2=schedule.anchor_2,
         tz_name=schedule.timezone,
     )
-    done = {
-        r.slot_index
+    runs = {
+        r.slot_index: r.status
         for r in db.query(AutomationRun)
         .filter(AutomationRun.channel_id == channel.id, AutomationRun.run_date == today)
         .all()
@@ -262,7 +262,9 @@ def slot_plan(
                 "scheduled_at_local": t.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
                 "scheduled_at_utc": t.isoformat(),
                 "due": t <= now_utc,
-                "done": i in done,
+                "done": runs.get(i) == "success",
+                "retrying": runs.get(i) in ("failed", "partial"),
+                "run_status": runs.get(i),
             }
             for i, t in enumerate(times)
         ],

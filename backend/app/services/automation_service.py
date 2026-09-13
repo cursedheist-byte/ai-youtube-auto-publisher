@@ -27,10 +27,14 @@ logger = logging.getLogger("ai_yt_publisher.automation")
 
 def _eligible_query(db: Session, channel_id, category_id=None):
     other_video = aliased(DriveVideo)
+    # Only a SUCCESSFUL upload consumes a video permanently. Failed/uncertain
+    # rows stay re-eligible so the automation retries the same video at the
+    # next due slot (claim_upload reuses the FAILED row safely).
     uploaded = exists().where(
         UploadHistory.channel_id == channel_id,
         UploadHistory.drive_video_id == other_video.id,
         other_video.drive_file_id == DriveVideo.drive_file_id,
+        UploadHistory.status == UploadStatus.SUCCESS,
     )
     return (
         db.query(DriveVideo)
@@ -166,7 +170,10 @@ def process_channel(db: Session, channel: YouTubeChannel, *, run_day: date | Non
     for video in videos:
         if attempted >= count:
             break
-        history, reason = claim_upload(db, channel.id, video.id, run_id=run.id, allow_failed_retry=False)
+        # allow_failed_retry=True: a FAILED row is reset to PENDING and the
+        # same video is re-uploaded in this slot. Only SUCCESS rows block
+        # (already_success), so a failed video keeps retrying every slot.
+        history, reason = claim_upload(db, channel.id, video.id, run_id=run.id, allow_failed_retry=True)
         if history is None:
             continue
         attempted += 1
