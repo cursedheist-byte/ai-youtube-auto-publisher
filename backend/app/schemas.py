@@ -141,7 +141,7 @@ class SlotPlanOut(BaseModel):
 
 class AutomationSettingsUpdate(BaseModel):
     enabled: bool | None = None
-    daily_upload_count: int | None = Field(default=None, ge=1, le=10)
+    daily_upload_count: int | None = Field(default=None, ge=1, le=2)
     category_id: uuid.UUID | None = None
 
 
@@ -265,3 +265,23 @@ class AccessCodeOut(BaseModel):
     status: str
     channel_limit: int
     daily_video_limit: int
+
+
+# --- Admin user management ---
+
+class AdminUserOut(BaseModel):
+    id: uuid.UUID
+    email: EmailStr
+    role: UserRole
+    access_mode: str | None = None
+    created_at: datetime
+    has_google_credentials: bool = False
+    has_openrouter_key: bool = False
+    daily_video_limit: int | None = None
+    channel_limit: int | None = None
+    channel_count: int = 0
+    upload_count: int = 0
+
+
+class AdminTerminateRequest(BaseModel):
+    reason: str | None = None

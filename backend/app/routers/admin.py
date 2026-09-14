@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends
@@ -17,7 +18,7 @@ from app.models import (
     YouTubeChannel,
     ChannelStatus,
 )
-from app.schemas import AdminDashboard, AutomationRunOut, AutomationScheduleOut, AutomationScheduleUpdate
+from app.schemas import AdminDashboard, AdminUserOut, AutomationRunOut, AutomationScheduleOut, AutomationScheduleUpdate
 from app.services.automation_service import get_schedule
 from app.services import schedule_logic
 
@@ -116,3 +117,69 @@ def health_summary(db: Session = Depends(get_db)):
     unresolved = db.query(func.count(FailedUpload.id)).filter(FailedUpload.resolved.is_(False)).scalar() or 0
     recent_failed_scans = db.query(func.count(DriveSource.id)).filter(DriveSource.last_scan_error.isnot(None)).scalar() or 0
     return {"connected_channels": connected, "channels_needing_attention": channel_errors, "unresolved_upload_failures": unresolved, "sources_with_scan_errors": recent_failed_scans}
+
+
+@router.get("/users", response_model=list[AdminUserOut], dependencies=[Depends(require_admin)])
+def admin_list_users(db: Session = Depends(get_db)):
+    """Every registered user with their account details for the admin."""
+    from app.models import UserCredential
+    from app.schemas import AdminUserOut
+
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    channel_counts = dict(db.query(YouTubeChannel.user_id, func.count(YouTubeChannel.id)).group_by(YouTubeChannel.user_id).all())
+    upload_counts = dict(
+        db.query(YouTubeChannel.user_id, func.count(UploadHistory.id))
+        .join(UploadHistory, UploadHistory.channel_id == YouTubeChannel.id)
+        .filter(UploadHistory.status == UploadStatus.SUCCESS)
+        .group_by(YouTubeChannel.user_id)
+        .all()
+    )
+    out = []
+    for u in users:
+        grant = u.access_grant
+        creds = db.query(UserCredential).filter(UserCredential.user_id == u.id).first()
+        out.append(AdminUserOut(
+            id=u.id,
+            email=u.email,
+            role=u.role,
+            access_mode=u.access_mode.value if hasattr(u.access_mode, "value") else str(u.access_mode),
+            created_at=u.created_at,
+            has_google_credentials=bool(creds and creds.google_client_id and creds.google_client_secret),
+            has_openrouter_key=bool(creds and creds.openrouter_api_key),
+            daily_video_limit=grant.daily_video_limit if grant else None,
+            channel_limit=grant.channel_limit if grant else None,
+            channel_count=channel_counts.get(u.id, 0),
+            upload_count=upload_counts.get(u.id, 0),
+        ))
+    return out
+
+
+@router.post("/users/{user_id}/terminate", dependencies=[Depends(require_admin)])
+def admin_terminate_user(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Terminate a user account: revoke admin-code access and disconnect their channels."""
+    from fastapi import HTTPException
+
+    from app.models import AccessGrant, UserCredential
+
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.role == UserRole.ADMIN:
+        raise HTTPException(status_code=400, detail="Admin accounts cannot be terminated from here.")
+
+    # Revoke any admin-code access grant so they fall back to own credentials.
+    grant = db.query(AccessGrant).filter(AccessGrant.user_id == target.id).first()
+    if grant:
+        code = db.query(AccessCode).filter(AccessCode.id == grant.access_code_id).with_for_update().first()
+        if code:
+            code.status = AccessCodeStatus.REVOKED
+        db.delete(grant)
+    target.access_mode = AccessMode.OWN
+    # Disconnect every channel so the scheduler stops uploading for them.
+    for channel in db.query(YouTubeChannel).filter(YouTubeChannel.user_id == target.id).all():
+        channel.status = ChannelStatus.REVOKED
+        settings_row = channel.settings
+        if settings_row:
+            settings_row.enabled = False
+    db.commit()
+    return {"status": "terminated", "user_id": str(target.id), "email": target.email}

@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     retry_interval_minutes: int = 60
     max_upload_retries: int = 3
     upload_stale_after_minutes: int = 30
+    cron_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

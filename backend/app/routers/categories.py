@@ -40,3 +40,22 @@ def delete_category(category_id: uuid.UUID, db: Session = Depends(get_db)):
     if db.query(DriveSource.id).filter(DriveSource.category_id == category_id).first():
         raise HTTPException(409, "This category is assigned to a Drive source. Reassign the source before deleting it.")
     db.delete(category); db.commit()
+
+
+@router.get("/with-counts")
+def list_categories_with_counts(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Each category with how many eligible videos it currently holds, so the
+    UI can show 'this category has N videos' and estimate days to finish."""
+    from sqlalchemy import func
+
+    from app.models import DriveVideo
+
+    rows = (
+        db.query(Category.id, Category.name, func.count(DriveVideo.id))
+        .join(DriveSource, DriveSource.category_id == Category.id)
+        .join(DriveVideo, DriveVideo.source_id == DriveSource.id)
+        .filter(DriveSource.status == "active", DriveVideo.is_valid_video.is_(True))
+        .group_by(Category.id, Category.name)
+        .all()
+    )
+    return [{"id": str(cid), "name": name, "video_count": count} for cid, name, count in rows]

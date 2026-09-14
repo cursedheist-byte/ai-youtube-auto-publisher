@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, auth, categories, channels, drive, uploads, access
+from app.routers import admin, auth, categories, channels, drive, uploads, access, scheduler_tick
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai_yt_publisher")
@@ -79,6 +79,7 @@ app.include_router(categories.admin_router)
 app.include_router(drive.router)
 app.include_router(channels.router)
 app.include_router(uploads.router)
+app.include_router(scheduler_tick.router)
 
 
 @app.get("/api/health")

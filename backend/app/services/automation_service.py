@@ -155,7 +155,7 @@ def process_channel(db: Session, channel: YouTubeChannel, *, run_day: date | Non
         logger.info("[scheduler] channel=%s already has run slot=%s for %s; skipping", channel.id, slot_index, run_day)
         return run
 
-    count = max(1, min(count_override if count_override is not None else settings_row.daily_upload_count, 10))
+    count = max(1, min(count_override if count_override is not None else settings_row.daily_upload_count, 2))
     videos = eligible_videos(db, channel.id, limit=max(count * 3, count), category_id=settings_row.category_id)
     if not videos:
         run.status = "no_eligible_videos"
@@ -267,7 +267,7 @@ def run_daily_automation() -> None:
         for channel in channels:
             try:
                 settings_row = channel.settings
-                count = max(1, min(settings_row.daily_upload_count, 10))
+                count = max(1, min(settings_row.daily_upload_count, 2))
                 existing = {
                     r.slot_index
                     for r in db.query(AutomationRun)
